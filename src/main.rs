@@ -178,7 +178,7 @@ fn render(
     } else {
         *headers as i32 + 1
     };
-    let mut x = 1;
+    let mut x = 2;
     let (max_y, max_x) = window.get_max_yx();
     let max_y = max_y - 2; // save space for status line
 
@@ -208,17 +208,17 @@ fn render(
             width = usize::max(width, element.chars().count());
             window.mvaddstr(y + i as i32 * 2, x, element);
         }
-        x += width as i32 + 1;
-        window.mv(0, x - 1);
+        x += width as i32 + 3;
+        window.mv(0, x - 2);
         window.vline('|', (headers + rows_to_show * 2) as i32);
 
         column += 1;
     }
     window.mv(y - 1, 0);
-    window.hline('=', x);
+    window.hline('=', x - 1);
     for i in 0..rows_to_show {
         window.mv(y + i as i32 * 2 + 1, 0);
-        window.hline('-', x);
+        window.hline('-', x - 1);
     }
 
     match mode {
