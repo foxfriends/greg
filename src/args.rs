@@ -1,6 +1,7 @@
 use csv::{Terminator, Trim};
 use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
+use std::str::FromStr;
 
 #[derive(Debug)]
 struct DelimiterError;
@@ -103,6 +104,35 @@ fn trim(s: &str) -> Trim {
     }
 }
 
+#[derive(Debug)]
+enum RangeError<E> {
+    MalformedRange,
+    MalformedValue(E),
+}
+
+impl<E: std::error::Error> std::error::Error for RangeError<E> {}
+
+impl<E: Display> Display for RangeError<E> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Self::MalformedRange => "a range must have exactly one value, or two values separated by ..".fmt(f),
+            Self::MalformedValue(err) => err.fmt(f),
+        }
+    }
+}
+
+fn range<T: FromStr + Copy>(s: &str) -> Result<(T, T), RangeError<T::Err>> {
+    let items: Vec<T> = s
+        .split("..")
+        .map(|item| item.parse().map_err(RangeError::MalformedValue))
+        .collect::<Result<Vec<_>, _>>()?;
+    match items.as_slice() {
+        [exact] => Ok((*exact, *exact)),
+        [lo, hi] => Ok((*lo, *hi)),
+        _ => Err(RangeError::MalformedRange),
+    }
+}
+
 /// A Grid based Editor named Greg. Command line editor for CSV, TSV... and more?
 ///
 /// # ASCII Characters
@@ -145,7 +175,7 @@ pub struct Args {
     pub comment: Option<u8>,
     /// The number of rows of headers. Default: 0
     #[structopt(short = "H", long, default_value = "0")]
-    pub headers: u8,
+    pub headers: usize,
     /// Whether to trim leading/trailing whitespace from `headers`, `fields`, or both (`all`). Default: none
     #[structopt(short, long, default_value = "none", parse(from_str = trim))]
     pub trim: Trim,
@@ -169,6 +199,9 @@ pub struct Args {
     /// The string that should be output for "False" in a boolean context. Default: No
     #[structopt(short = "F", long = "false", default_value = "No")]
     pub false_value: String,
+    /// Width to render columns. May be exact (e.g. 40) or a range (e.g. 10..40). Default: 40
+    #[structopt(short = "w", long, default_value = "40", parse(try_from_str = range))]
+    pub column_width: (usize, usize),
     /// Path to the file to edit.
     #[structopt(parse(from_os_str))]
     pub file: PathBuf,
