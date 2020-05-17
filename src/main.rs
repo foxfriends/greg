@@ -2,6 +2,7 @@ use csv::{ReaderBuilder, StringRecord};
 use ncurses::set_escdelay;
 use pancurses::{
     endwin, getmouse, initscr, mousemask, noecho, raw, resize_term, start_color, Input, Window,
+    A_BOLD,
 };
 use std::borrow::Cow;
 use std::fs::File;
@@ -189,6 +190,7 @@ fn render(
 
     let mut column = 0;
     while x < max_x && column < data.dimensions()[1] {
+        window.attron(A_BOLD);
         if *headers > 0 {
             for i in 0..*headers {
                 let header = data[&[i, view[1] + column]]
@@ -198,6 +200,7 @@ fn render(
                 window.mvaddstr(i as i32, x, header);
             }
         }
+        window.attroff(A_BOLD);
 
         let mut width = column_width.0;
         for i in 0..rows_to_show {
