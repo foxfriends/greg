@@ -16,7 +16,7 @@ use matrix::Matrix;
 use mode::Mode;
 
 #[derive(Default)]
-struct State {
+struct State<'d> {
     // settings state
     column_width: (usize, usize),
     headers: usize,
@@ -27,6 +27,9 @@ struct State {
     command: String,
     view: [usize; 2],
     cursors: Vec<[usize; 3]>,
+
+    undo_stack: Vec<Matrix<Cow<'d, str>>>,
+    data: Matrix<Cow<'d, str>>,
 }
 
 #[paw::main]
@@ -61,10 +64,11 @@ fn main(args: Args) -> std::io::Result<()> {
     let mut state = State {
         column_width: args.column_width,
         headers: args.headers,
+        data,
         ..State::default()
     };
     loop {
-        render(&window, &state, &data);
+        render(&window, &state);
         match window.getch() {
             Some(Input::KeyResize) => {
                 resize_term(0, 0);
@@ -170,9 +174,9 @@ fn render(
         mode,
         command,
         status,
+        data,
         ..
     }: &State,
-    data: &Matrix<Cow<str>>,
 ) {
     let y = if *headers == 0 {
         0
@@ -221,11 +225,41 @@ fn render(
             window.mvaddstr(y, *position, "│");
         }
     }
-    crossed_hline(window, y - 1, 0, x - 1, "╞", "═", "╪", "╡", &vline_positions);
+    crossed_hline(
+        window,
+        y - 1,
+        0,
+        x - 1,
+        "╞",
+        "═",
+        "╪",
+        "╡",
+        &vline_positions,
+    );
     for i in 0..rows_to_show - 1 {
-        crossed_hline(window, y + i as i32 * 2 + 1, 0, x - 1, "├", "─", "┼", "┤", &vline_positions);
+        crossed_hline(
+            window,
+            y + i as i32 * 2 + 1,
+            0,
+            x - 1,
+            "├",
+            "─",
+            "┼",
+            "┤",
+            &vline_positions,
+        );
     }
-    crossed_hline(window, y + (rows_to_show - 1) as i32 * 2 + 1, 0, x - 1, "└", "─", "┴", "┘", &vline_positions);
+    crossed_hline(
+        window,
+        y + (rows_to_show - 1) as i32 * 2 + 1,
+        0,
+        x - 1,
+        "└",
+        "─",
+        "┴",
+        "┘",
+        &vline_positions,
+    );
 
     match mode {
         Mode::Command => set_status(&window, format!(":{}", command)),
@@ -234,7 +268,17 @@ fn render(
     }
 }
 
-fn crossed_hline(window: &Window, y: i32, x: i32, max_x: i32, left: &'static str, middle: &'static str, cross: &'static str, right: &'static str, crosses: &[i32]) {
+fn crossed_hline(
+    window: &Window,
+    y: i32,
+    x: i32,
+    max_x: i32,
+    left: &'static str,
+    middle: &'static str,
+    cross: &'static str,
+    right: &'static str,
+    crosses: &[i32],
+) {
     for ix in x..max_x {
         let l = if ix == 0 {
             left
