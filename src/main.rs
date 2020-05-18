@@ -18,16 +18,19 @@ use mode::Mode;
 #[derive(Default)]
 struct State<'d> {
     // settings state
-    column_width: (usize, usize),
+    column_width: (usize, usize), // (min, max)
     headers: usize,
 
     // program state
     mode: Mode,
     status: String,
     command: String,
-    view: [usize; 2],
-    cursors: Vec<[usize; 3]>,
+    view: [usize; 2], // [y, x]
+    cursors: Vec<[usize; 3]>, // [y, x, char]
 
+    // data state
+    // TODO: this is a very inefficient undo-stack representation, particularly for large data.
+    //       will need to improve this
     undo_stack: Vec<Matrix<Cow<'d, str>>>,
     data: Matrix<Cow<'d, str>>,
 }
@@ -65,6 +68,7 @@ fn main(args: Args) -> std::io::Result<()> {
         column_width: args.column_width,
         headers: args.headers,
         data,
+        cursors: vec![[0, 0, 0]],
         ..State::default()
     };
     loop {
@@ -225,41 +229,14 @@ fn render(
             window.mvaddstr(y, *position, "│");
         }
     }
-    crossed_hline(
-        window,
-        y - 1,
-        0,
-        x - 1,
-        "╞",
-        "═",
-        "╪",
-        "╡",
-        &vline_positions,
-    );
+    #[rustfmt::skip]
+    crossed_hline(window, y - 1, 0, x - 1, "╞", "═", "╪", "╡", &vline_positions);
     for i in 0..rows_to_show - 1 {
-        crossed_hline(
-            window,
-            y + i as i32 * 2 + 1,
-            0,
-            x - 1,
-            "├",
-            "─",
-            "┼",
-            "┤",
-            &vline_positions,
-        );
+        #[rustfmt::skip]
+        crossed_hline(window, y + i as i32 * 2 + 1, 0, x - 1, "├", "─", "┼", "┤", &vline_positions);
     }
-    crossed_hline(
-        window,
-        y + (rows_to_show - 1) as i32 * 2 + 1,
-        0,
-        x - 1,
-        "└",
-        "─",
-        "┴",
-        "┘",
-        &vline_positions,
-    );
+    #[rustfmt::skip]
+    crossed_hline(window, y + (rows_to_show - 1) as i32 * 2 + 1, 0, x - 1, "└", "─", "┴", "┘", &vline_positions);
 
     match mode {
         Mode::Command => set_status(&window, format!(":{}", command)),
