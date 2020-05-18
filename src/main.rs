@@ -2,7 +2,7 @@ use csv::{ReaderBuilder, StringRecord};
 use ncurses::set_escdelay;
 use pancurses::{
     endwin, getmouse, initscr, mousemask, noecho, raw, resize_term, start_color, Input, Window,
-    A_BOLD,
+    A_BOLD, A_DIM, A_STANDOUT,
 };
 use std::borrow::Cow;
 use std::fs::File;
@@ -201,13 +201,21 @@ fn render(
     } else {
         *headers as i32 + 1
     };
-    let mut x = 2;
     let (max_y, max_x) = window.get_max_yx();
     let max_y = max_y - 2; // save space for status line
     let rows_to_show = usize::min(data.dimensions()[0] - view[0], max_y as usize / 2 - headers);
 
     let bottom_position = (headers + rows_to_show * 2) as i32;
-    let mut vline_positions = vec![0];
+
+    // TODO: line numbers in a more subtle colour?
+    let digits = ((rows_to_show + view[0]) as f32).log10().ceil() as usize;
+    for i in 0..rows_to_show {
+        let s = format!("{:>width$}", i + view[0], width = digits);
+        window.mvaddstr(y + i as i32 * 2, 0, s);
+    }
+
+    let mut x = digits as i32 + 2;
+    let mut vline_positions = vec![x - 1];
 
     let mut column = view[1];
     while x < max_x && column < data.dimensions()[1] {
@@ -245,13 +253,13 @@ fn render(
         }
     }
     #[rustfmt::skip]
-    crossed_hline(window, y - 1, 0, x - 1, "╞", "═", "╪", "╡", &vline_positions);
+    crossed_hline(window, y - 1, vline_positions[0], x - 1, "╞", "═", "╪", "╡", &vline_positions);
     for i in 0..rows_to_show - 1 {
         #[rustfmt::skip]
-        crossed_hline(window, y + i as i32 * 2 + 1, 0, x - 1, "├", "─", "┼", "┤", &vline_positions);
+        crossed_hline(window, y + i as i32 * 2 + 1, vline_positions[0], x - 1, "├", "─", "┼", "┤", &vline_positions);
     }
     #[rustfmt::skip]
-    crossed_hline(window, y + (rows_to_show - 1) as i32 * 2 + 1, 0, x - 1, "└", "─", "┴", "┘", &vline_positions);
+    crossed_hline(window, y + (rows_to_show - 1) as i32 * 2 + 1, vline_positions[0], x - 1, "└", "─", "┴", "┘", &vline_positions);
 
     match mode {
         Mode::Command => set_status(&window, format!(":{}", command)),
@@ -272,7 +280,7 @@ fn crossed_hline(
     crosses: &[i32],
 ) {
     for ix in x..max_x {
-        let l = if ix == 0 {
+        let l = if ix == x {
             left
         } else if ix == max_x - 1 {
             right
