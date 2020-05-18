@@ -182,11 +182,10 @@ fn render(
     let mut x = 2;
     let (max_y, max_x) = window.get_max_yx();
     let max_y = max_y - 2; // save space for status line
-
     let rows_to_show = usize::min(data.dimensions()[0] - headers, max_y as usize / 2 - headers);
 
-    window.mv(0, 0);
-    window.vline('|', (headers + rows_to_show * 2) as i32);
+    let bottom_position = (headers + rows_to_show * 2) as i32;
+    let mut vline_positions = vec![0];
 
     let mut column = 0;
     while x < max_x && column < data.dimensions()[1] {
@@ -212,21 +211,40 @@ fn render(
             window.mvaddstr(y + i as i32 * 2, x, element);
         }
         x += width as i32 + 3;
-        window.mv(0, x - 2);
-        window.vline('|', (headers + rows_to_show * 2) as i32);
+        vline_positions.push(x - 2);
 
         column += 1;
     }
-    window.mv(y - 1, 0);
-    window.hline('=', x - 1);
-    for i in 0..rows_to_show {
-        window.mv(y + i as i32 * 2 + 1, 0);
-        window.hline('-', x - 1);
+
+    for position in &vline_positions {
+        for y in 0..bottom_position {
+            window.mvaddstr(y, *position, "│");
+        }
     }
+    crossed_hline(window, y - 1, 0, x - 1, "╞", "═", "╪", "╡", &vline_positions);
+    for i in 0..rows_to_show - 1 {
+        crossed_hline(window, y + i as i32 * 2 + 1, 0, x - 1, "├", "─", "┼", "┤", &vline_positions);
+    }
+    crossed_hline(window, y + (rows_to_show - 1) as i32 * 2 + 1, 0, x - 1, "└", "─", "┴", "┘", &vline_positions);
 
     match mode {
         Mode::Command => set_status(&window, format!(":{}", command)),
         Mode::Search => set_status(&window, format!("?{}", command)),
         _ => set_status(&window, status),
+    }
+}
+
+fn crossed_hline(window: &Window, y: i32, x: i32, max_x: i32, left: &'static str, middle: &'static str, cross: &'static str, right: &'static str, crosses: &[i32]) {
+    for ix in x..max_x {
+        let l = if ix == 0 {
+            left
+        } else if ix == max_x - 1 {
+            right
+        } else if crosses.contains(&ix) {
+            cross
+        } else {
+            middle
+        };
+        window.mvaddstr(y, ix, l);
     }
 }
