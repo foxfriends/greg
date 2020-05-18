@@ -25,7 +25,7 @@ struct State<'d> {
     mode: Mode,
     status: String,
     command: String,
-    view: [usize; 2], // [y, x]
+    view: [usize; 2],         // [y, x]
     cursors: Vec<[usize; 3]>, // [y, x, char]
 
     // data state
@@ -68,6 +68,7 @@ fn main(args: Args) -> std::io::Result<()> {
         column_width: args.column_width,
         headers: args.headers,
         data,
+        view: [args.headers, 0],
         cursors: vec![[0, 0, 0]],
         ..State::default()
     };
@@ -118,8 +119,26 @@ fn normal_mode(state: &mut State, window: &Window, input: Input) {
         Input::Character(':') => {
             state.mode = Mode::Command;
         }
-        Input::Character('?') => {
+        Input::Character('/') => {
             state.mode = Mode::Search;
+        }
+        Input::Character('H') => {
+            state.view[1] = state.view[1].saturating_sub(1);
+        }
+        Input::Character('J') => {
+            state.view[0] = usize::min(
+                state.view[0] + 1,
+                state.data.dimensions()[0].saturating_sub(1),
+            );
+        }
+        Input::Character('K') => {
+            state.view[0] = usize::max(state.headers, state.view[0].saturating_sub(1));
+        }
+        Input::Character('L') => {
+            state.view[1] = usize::min(
+                state.view[1] + 1,
+                state.data.dimensions()[1].saturating_sub(1),
+            );
         }
         _ => state.status = format!("received {:?}", input),
     }
@@ -163,12 +182,6 @@ fn set_status<T: AsRef<str>>(window: &Window, status: T) {
     window.clrtoeol();
 }
 
-macro_rules! add {
-    ($a:expr, $b:expr) => {
-        [$a[0] + $b[0], $a[1] + $b[1]]
-    };
-}
-
 fn render(
     window: &Window,
     State {
@@ -182,6 +195,7 @@ fn render(
         ..
     }: &State,
 ) {
+    window.clear();
     let y = if *headers == 0 {
         0
     } else {
@@ -190,28 +204,29 @@ fn render(
     let mut x = 2;
     let (max_y, max_x) = window.get_max_yx();
     let max_y = max_y - 2; // save space for status line
-    let rows_to_show = usize::min(data.dimensions()[0] - headers, max_y as usize / 2 - headers);
+    let rows_to_show = usize::min(data.dimensions()[0] - view[0], max_y as usize / 2 - headers);
 
     let bottom_position = (headers + rows_to_show * 2) as i32;
     let mut vline_positions = vec![0];
 
-    let mut column = 0;
+    let mut column = view[1];
     while x < max_x && column < data.dimensions()[1] {
+        let mut width = column_width.0;
         window.attron(A_BOLD);
         if *headers > 0 {
             for i in 0..*headers {
-                let header = data[&[i, view[1] + column]]
+                let header = data[&[i, column]]
                     .chars()
                     .take(column_width.1)
                     .collect::<String>();
+                width = usize::max(width, header.chars().count());
                 window.mvaddstr(i as i32, x, header);
             }
         }
         window.attroff(A_BOLD);
 
-        let mut width = column_width.0;
         for i in 0..rows_to_show {
-            let element = data[&add!(view, [i + 1, column])]
+            let element = data[&[view[0] + i, column]]
                 .chars()
                 .take(column_width.1)
                 .collect::<String>();
