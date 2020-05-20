@@ -2,7 +2,7 @@ use csv::{ReaderBuilder, StringRecord};
 use ncurses::set_escdelay;
 use pancurses::{
     endwin, getmouse, initscr, mousemask, noecho, raw, resize_term, start_color, Input, Window,
-    A_BOLD, A_DIM, A_STANDOUT,
+    A_BOLD,
 };
 use std::borrow::Cow;
 use std::fs::File;
@@ -10,30 +10,12 @@ use std::fs::File;
 mod args;
 mod matrix;
 mod mode;
+mod state;
 
 use args::Args;
 use matrix::Matrix;
 use mode::Mode;
-
-#[derive(Default)]
-struct State<'d> {
-    // settings state
-    column_width: (usize, usize), // (min, max)
-    headers: usize,
-
-    // program state
-    mode: Mode,
-    status: String,
-    command: String,
-    view: [usize; 2],         // [y, x]
-    cursors: Vec<[usize; 3]>, // [y, x, char]
-
-    // data state
-    // TODO: this is a very inefficient undo-stack representation, particularly for large data.
-    //       will need to improve this
-    undo_stack: Vec<Matrix<Cow<'d, str>>>,
-    data: Matrix<Cow<'d, str>>,
-}
+use state::{Cursor, State};
 
 #[paw::main]
 fn main(args: Args) -> std::io::Result<()> {
@@ -69,7 +51,7 @@ fn main(args: Args) -> std::io::Result<()> {
         headers: args.headers,
         data,
         view: [args.headers, 0],
-        cursors: vec![[0, 0, 0]],
+        cursors: vec![Cursor::new(args.headers, 0)],
         ..State::default()
     };
     loop {
@@ -81,12 +63,14 @@ fn main(args: Args) -> std::io::Result<()> {
             Some(Input::KeyMouse) => {
                 let _mouse_event = getmouse().expect("unexpected mouse error");
             }
+            Some(input) if state.mode == Mode::View => view_mode(&mut state, &window, input),
             Some(input) if state.mode == Mode::Insert => insert_mode(&mut state, &window, input),
             Some(input) if state.mode == Mode::Command => {
                 if command_mode(&mut state, &window, input) {
                     // TODO: unambiguous prefix matching & suggestion
                     match std::mem::take(&mut state.command).as_ref() {
                         "quit" => break,
+                        // TODO: goto line/column
                         cmd => {
                             state.status = format!("unknown command '{}'", cmd);
                             state.mode = Mode::Normal;
@@ -116,31 +100,30 @@ fn normal_mode(state: &mut State, window: &Window, input: Input) {
     state.status.clear();
     match input {
         Input::Character('i') => state.mode = Mode::Insert,
-        Input::Character(':') => {
-            state.mode = Mode::Command;
-        }
-        Input::Character('/') => {
-            state.mode = Mode::Search;
-        }
-        Input::Character('H') => {
-            state.view[1] = state.view[1].saturating_sub(1);
-        }
-        Input::Character('J') => {
-            state.view[0] = usize::min(
-                state.view[0] + 1,
-                state.data.dimensions()[0].saturating_sub(1),
-            );
-        }
-        Input::Character('K') => {
-            state.view[0] = usize::max(state.headers, state.view[0].saturating_sub(1));
-        }
-        Input::Character('L') => {
-            state.view[1] = usize::min(
-                state.view[1] + 1,
-                state.data.dimensions()[1].saturating_sub(1),
-            );
-        }
+        Input::Character(':') => state.mode = Mode::Command,
+        Input::Character('/') => state.mode = Mode::Search,
+        Input::Character('v') => state.mode = Mode::View,
+
+        // move all unpinned cursors
+        Input::Character('h') => state.move_cursor(0, -1),
+        Input::Character('j') => state.move_cursor(1, 0),
+        Input::Character('k') => state.move_cursor(-1, 0),
+        Input::Character('l') => state.move_cursor(0, 1),
         _ => state.status = format!("received {:?}", input),
+    }
+}
+
+fn view_mode(state: &mut State, window: &Window, input: Input) {
+    state.status.clear();
+    match input {
+        Input::Character(':') => state.mode = Mode::Command,
+        Input::Character('/') => state.mode = Mode::Search,
+        Input::Character('\u{1b}') => state.mode = Mode::Normal,
+        Input::Character('h') => state.move_view(0, -1),
+        Input::Character('j') => state.move_view(1, 0),
+        Input::Character('k') => state.move_view(-1, 0),
+        Input::Character('l') => state.move_view(0, 1),
+        _ => {}
     }
 }
 
@@ -176,12 +159,6 @@ fn command_mode(state: &mut State, window: &Window, input: Input) -> bool {
     false
 }
 
-fn set_status<T: AsRef<str>>(window: &Window, status: T) {
-    let y = window.get_max_y();
-    window.mvaddstr(y - 1, 0, status);
-    window.clrtoeol();
-}
-
 fn render(
     window: &Window,
     State {
@@ -192,10 +169,14 @@ fn render(
         command,
         status,
         data,
+        cursors,
         ..
     }: &State,
 ) {
-    window.clear();
+    // TODO: this clear is not great, but figuring out which cells to overwrite optimally is not fun.
+    window.erase();
+
+    // Pre-compute some guide values
     let y = if *headers == 0 {
         0
     } else {
@@ -204,9 +185,9 @@ fn render(
     let (max_y, max_x) = window.get_max_yx();
     let max_y = max_y - 2; // save space for status line
     let rows_to_show = usize::min(data.dimensions()[0] - view[0], max_y as usize / 2 - headers);
-
     let bottom_position = (headers + rows_to_show * 2) as i32;
 
+    // Write line numbers
     // TODO: line numbers in a more subtle colour?
     let digits = ((rows_to_show + view[0]) as f32).log10().ceil() as usize;
     for i in 0..rows_to_show {
@@ -214,11 +195,12 @@ fn render(
         window.mvaddstr(y + i as i32 * 2, 0, s);
     }
 
+    // Print the actual table, column by column
     let mut x = digits as i32 + 2;
     let mut vline_positions = vec![x - 1];
-
     let mut column = view[1];
     while x < max_x && column < data.dimensions()[1] {
+        // Headers
         let mut width = column_width.0;
         window.attron(A_BOLD);
         if *headers > 0 {
@@ -233,6 +215,7 @@ fn render(
         }
         window.attroff(A_BOLD);
 
+        // Data
         for i in 0..rows_to_show {
             let element = data[&[view[0] + i, column]]
                 .chars()
@@ -247,6 +230,7 @@ fn render(
         column += 1;
     }
 
+    // Print the table grid lines, vertical, then horizontal with crosses
     for position in &vline_positions {
         for y in 0..bottom_position {
             window.mvaddstr(y, *position, "│");
@@ -261,11 +245,25 @@ fn render(
     #[rustfmt::skip]
     crossed_hline(window, y + (rows_to_show - 1) as i32 * 2 + 1, vline_positions[0], x - 1, "└", "─", "┴", "┘", &vline_positions);
 
+    // Write status text on the left
     match mode {
         Mode::Command => set_status(&window, format!(":{}", command)),
         Mode::Search => set_status(&window, format!("?{}", command)),
         _ => set_status(&window, status),
     }
+
+    // Write modeline stuff on the right
+    let modeline = format!(
+        "{} Mode. {}:{}/{}:{}. {} cursors.",
+        mode,
+        cursors[0].row - headers,
+        cursors[0].column,
+        data.dimensions()[0] - headers,
+        data.dimensions()[1],
+        cursors.len(),
+    );
+    let (max_y, max_x) = window.get_max_yx();
+    window.mvaddstr(max_y - 1, max_x - modeline.len() as i32 - 1, modeline);
 }
 
 fn crossed_hline(
@@ -291,4 +289,10 @@ fn crossed_hline(
         };
         window.mvaddstr(y, ix, l);
     }
+}
+
+fn set_status<T: AsRef<str>>(window: &Window, status: T) {
+    let y = window.get_max_y();
+    window.mvaddstr(y - 1, 0, status);
+    window.clrtoeol();
 }
